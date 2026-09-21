@@ -1,117 +1,148 @@
 # CheckTalk
 
-### Live AI chess commentary backed by deterministic analysis and an event-driven AWS data platform
+### A real-time, event-driven data platform demonstrated through live chess
 
-[Play the live demo](https://checktalk.hakeshk.com) · [Read the in-app project story](https://checktalk.hakeshk.com/#project)
+[Explore the live data product](https://checktalk.hakeshk.com) · [Read the in-app engineering story](https://checktalk.hakeshk.com/#project)
 
-![CheckTalk gameplay with Stockfish, commentary controls, and voice profiles](screenshots/gameplay.png)
+![CheckTalk gameplay with Stockfish, live commentary, and configurable controls](screenshots/gameplay.png)
 
-## The project
+## The data engineering story
 
-CheckTalk turns a browser chess game into a live broadcast. A player faces Stockfish while the system identifies the opening, evaluates each move, tracks how both sides are playing, and delivers concise spoken commentary through three original voice profiles.
+CheckTalk treats a chess game as a stream of stateful business events. Every move, commentary response, and game transition produces structured data that must remain valid, ordered within its match, durable across failures, replayable for investigation, and queryable without slowing the player experience.
 
-The visible chess experience sits on top of a production-oriented system designed around two different latency requirements:
+The chess interface is the event producer and live demonstration. Underneath it is a serverless data platform that:
 
-- The **player path** returns grounded text and audio quickly enough to support a live game.
-- The **analytics path** captures ordered lifecycle events without delaying gameplay.
+1. Defines versioned event contracts with correlation identifiers.
+2. Validates and bounds records at ingestion.
+3. Preserves per-game order through partitioned streaming.
+4. Handles consumer failures without replaying successful records.
+5. Stores immutable raw events in an encrypted Bronze layer.
+6. Exposes the history through a cataloged, guardrailed query layer.
+7. Uses the trusted operational context to support a low-latency AI commentary experience.
 
-I designed and built the product end to end: interaction design, chess engine integration, commentary orchestration, generative AI grounding, voice delivery, event streaming, analytics storage, infrastructure, deployment, and observability.
+I designed and built the complete lifecycle: event modeling, ingestion, stream partitioning, fault-tolerant persistence, storage layout, metadata catalog, query controls, observability, infrastructure, deployment, and the product that generates the data.
 
-## Product experience
+## Why chess is a useful streaming domain
 
-- Play Stockfish at multiple difficulty levels and time controls.
-- Hear opening-aware, position-aware commentary for both players.
-- Choose Host, Strategist, or Storyteller delivery styles.
-- Keep commentary natural with queueing, stale-event coalescing, repetition controls, and deliberate pauses.
-- Switch board and application themes.
-- Review and replay the last three games from the current session.
-- Continue playing if AI commentary, speech, or telemetry becomes unavailable.
+A chess game creates the same constraints found in many production data systems:
 
-![CheckTalk project details page](screenshots/project-details.png)
+- **Ordering matters locally:** move 18 cannot be processed before move 17 within one game.
+- **Parallelism matters globally:** unrelated games should process independently.
+- **State evolves over time:** each event is meaningful in the context of prior events.
+- **Traffic is bursty:** rapid games produce events faster than classical games.
+- **Replay has value:** complete history supports game reconstruction, auditing, and new downstream consumers.
+- **The operational path cannot wait:** analytics latency or failure must never block gameplay.
 
-## Architecture
+## Data architecture
 
 ![CheckTalk production architecture](docs/architecture.svg)
 
-### Player and commentary path
+### Analytical data plane
 
 ```text
-Route 53 → CloudFront → private S3-hosted React application
-                              │
-                              ├─ Stockfish WASM evaluates locally
-                              │
-                              └─ API Gateway → Lambda → Bedrock + Polly
+Browser lifecycle events
+          ↓
+API Gateway → ingestion Lambda → Amazon Kinesis Data Streams
+                                      │
+                                      │ partition key = game_id
+                                      ↓
+                              persistence Lambda
+                                      ↓
+                    encrypted + versioned S3 Bronze
+                                      ↓
+                    AWS Glue Catalog → Amazon Athena
 ```
 
-Stockfish establishes the chess facts. A deterministic backend validates the request, recomputes the evaluation delta, classifies the move, and derives position context. Amazon Bedrock writes only the short broadcast line; Amazon Polly synthesizes its selected delivery profile.
+| Stage | Responsibility |
+| --- | --- |
+| Event producer | Emits schema version, event ID, game ID, timestamp, event type, and bounded payload. |
+| Ingestion | Rejects malformed or oversized records before they enter the stream. |
+| Streaming | Uses `game_id` as the Kinesis partition key to preserve match order while games scale independently. |
+| Processing | Uses partial batch responses, bounded retries, batch bisection, and an SQS dead-letter queue. |
+| Bronze storage | Retains encrypted, versioned source events partitioned by date, event type, and game. |
+| Discovery and query | Uses Glue partition projection and Athena with a 1 GiB per-query scan guardrail. |
 
-This separation keeps tactical judgement out of the language model and reduces confident but incorrect chess commentary.
-
-### Streaming and analytics path
+### Operational serving plane
 
 ```text
-Browser events → API Gateway → ingestion Lambda → Kinesis
-                                                   │ game_id partition key
-                                                   ↓
-                                         persistence Lambda
-                                                   ↓
-                                  encrypted, versioned S3 Bronze
-                                                   ↓
-                                        Glue Catalog + Athena
+React + Stockfish → API Gateway → Lambda → Bedrock + Polly
 ```
 
-Analytics is intentionally asynchronous. Events within a game remain ordered, separate games scale independently, failed records use bounded retries and a dead-letter queue, and the raw event history remains replayable and queryable.
+The synchronous path serves the live product, while the analytical path remains asynchronous. Both originate from the same game domain, but analytics backpressure cannot delay a move. Stockfish and deterministic classifiers establish the facts; AI is used only to turn trusted context into a concise spoken line.
+
+This is intentionally a data platform with an AI-powered serving use case—not an AI model presented as the system of record.
+
+## Data reliability and operability
+
+- Versioned schemas and correlation IDs make records traceable across services.
+- Per-game partitioning provides the required ordering boundary without global serialization.
+- Partial batch failure handling retries only unsuccessful Kinesis records.
+- Batch bisection and a dead-letter queue isolate poison records.
+- S3 encryption and versioning preserve a durable raw history.
+- Date, event-type, and game partitions reduce downstream scans.
+- Glue partition projection avoids manual partition-registration work.
+- Athena scan limits protect against unexpectedly expensive queries.
+- Structured logs, CloudWatch metrics, dashboards, and alarms expose pipeline health.
+- Fire-and-forget telemetry keeps data failures outside the gameplay critical path.
 
 ## Engineering decisions
 
-| Decision | Reason |
+| Decision | Data-engineering rationale |
 | --- | --- |
-| Stockfish decides; the model narrates | Preserves chess correctness while retaining expressive language. |
-| Finish active speech before switching topics | Avoids the unnatural mid-sentence cuts common in event-per-move audio. |
-| Coalesce stale normal moves | Keeps commentary near the current board position when play accelerates. |
-| Permit intentional pauses | Continuous filler became repetitive; a broadcast should know when silence is better. |
-| Keep analytics off the player path | Telemetry failure cannot block a move or commentary response. |
-| Use HTTP before WebSockets | Request/response is sufficient for a single-player experience; server push can wait for spectators or shared games. |
-| Use Athena instead of always-on analytics compute | Matches a portfolio-scale, bursty query workload with a low idle cost. |
+| Partition by `game_id` | Preserve order only where required and retain concurrency across games. |
+| Separate serving and analytics | Give each path its own latency, failure, and scaling behavior. |
+| Keep immutable Bronze events | Preserve source history for audit, replay, backfill, and future transformations. |
+| Validate before Kinesis | Prevent malformed payloads from becoming downstream operational debt. |
+| Use partial batch responses | Avoid duplicating successful writes when one record fails. |
+| Use Athena over always-on compute | Match a bursty portfolio-scale analytical workload with low idle cost. |
+| Use partition projection | Make new date/type partitions queryable without a crawler dependency. |
+| Treat AI as a consumer of facts | Keep domain correctness deterministic and independently testable. |
 
-## Reliability and production practices
+## What the data powers
 
-- Private S3 origin behind CloudFront, Route 53, ACM TLS, and security headers.
-- Strict API validation, bounded payloads, throttling, and explicit CORS.
-- Text fallback when speech synthesis or browser autoplay fails.
-- Structured logs, CloudWatch metrics, dashboards, and alarms.
-- Encrypted and versioned data storage with lifecycle policies.
-- Partial batch failure handling, retry bisection, and an SQS dead-letter queue.
-- GitHub OIDC deployment with short-lived AWS credentials rather than stored access keys.
-- Terraform-managed infrastructure with explicit production deployment review.
+The platform supports a polished live product while demonstrating that infrastructure through an understandable domain:
+
+- Opening-aware commentary grounded in Stockfish and deterministic position context.
+- Three original commentary delivery profiles.
+- Multiple time controls and engine difficulty levels.
+- Session history and replay for the latest three games.
+- Graceful degradation when commentary, speech, or telemetry is unavailable.
+- Dark/light application themes and configurable chessboard themes.
+
+![CheckTalk data-engineering project overview](screenshots/project-details.png)
 
 ## Verification
 
-- **39 backend unit tests** across commentary, opening recognition, position context, ingestion, and persistence.
+- **39 backend unit tests** across event ingestion, persistence, commentary classification, opening recognition, and position context.
+- Stream-ingestion tests for validation, partition keys, and accepted-record responses.
+- Persistence tests for S3 object layout and partial batch failures.
+- Production smoke checks covering ingestion, S3 persistence, Athena visibility, and dead-letter queue health.
 - Frontend static analysis and TypeScript production builds.
-- Terraform configuration validation.
-- Production smoke tests for each commentary profile and audio response.
-- Graceful-degradation checks for commentary, speech, and telemetry failures.
+- Terraform configuration validation and reproducible infrastructure.
+- Graceful-degradation checks that prove telemetry cannot block the player path.
 
 ## Technology
 
-**Frontend:** React, TypeScript, chess.js, Stockfish WASM, Vite  
-**AI and voice:** Amazon Bedrock, Amazon Nova Lite, Amazon Polly  
-**Backend:** Python, AWS Lambda, API Gateway  
-**Data:** Amazon Kinesis Data Streams, S3, AWS Glue, Athena  
-**Platform:** CloudFront, Route 53, ACM, CloudWatch, SQS, Terraform, GitHub Actions/OIDC
+- **Streaming and storage:** Amazon Kinesis Data Streams, S3, SQS
+- **Catalog and analytics:** AWS Glue, Amazon Athena
+- **Processing:** Python, AWS Lambda, API Gateway
+- **Operations:** CloudWatch, Terraform, GitHub Actions/OIDC
+- **Data-producing application:** React, TypeScript, chess.js, Stockfish WASM
+- **Applied AI serving layer:** Amazon Bedrock, Amazon Nova Lite, Amazon Polly
 
-## What I would build next
+## Next data-engineering iterations
 
-- Spectator mode with shared live games and server-pushed commentary.
-- Evaluation and latency dashboards built from production telemetry.
-- Human-versus-human rooms and authenticated cross-device game history.
-- Automated commentary quality evaluation for chess accuracy, repetition, and timing.
+- Add automated schema compatibility checks and a quarantine path for invalid records.
+- Transform JSON Bronze events into partitioned Parquet datasets for a curated Silver layer.
+- Build replay and backfill tooling from immutable source events.
+- Add data-quality SLAs for freshness, completeness, duplicates, and ordering.
+- Publish operational and product metrics through an Athena-backed dashboard.
+- Load-test multiple game partitions and tune shard capacity from measured throughput.
 
 ## Repository scope
 
-This public repository is an intentionally focused project showcase. It contains product screenshots and system-design documentation, but not the deployable application source, production infrastructure, environment configuration, or operational runbooks. The complete implementation is maintained privately and can be walked through during an interview.
+This public repository is an intentionally focused engineering showcase. It contains product screenshots and system-design documentation, but not deployable application source, production infrastructure, environment configuration, or operational runbooks. The complete implementation is maintained privately and can be walked through during an interview.
 
 ---
 
-Built by [Hakesh Kumar](https://github.com/HakeshKumar). The live application is available at [checktalk.hakeshk.com](https://checktalk.hakeshk.com).
+Built by [Hakesh Kumar](https://github.com/HakeshKumar). The live system is available at [checktalk.hakeshk.com](https://checktalk.hakeshk.com).
