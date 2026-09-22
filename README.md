@@ -114,7 +114,7 @@ The platform supports a polished live product while demonstrating that infrastru
 
 ## Verification
 
-- **49 backend unit tests** across event ingestion, persistence, coaching and commentary behavior, opening recognition, and position context.
+- **52 backend unit tests** across event ingestion, persistence, coaching and commentary behavior, opening recognition, and position context.
 - Stream-ingestion tests for validation, partition keys, and accepted-record responses.
 - Persistence tests for S3 object layout and partial batch failures.
 - Production smoke checks covering ingestion, S3 persistence, Athena visibility, and dead-letter queue health.
