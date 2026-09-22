@@ -4,7 +4,7 @@
 
 [Explore the live data product](https://checktalk.hakeshk.com) · [Read the in-app engineering story](https://checktalk.hakeshk.com/#project)
 
-![CheckTalk gameplay with Stockfish, live commentary, and configurable controls](screenshots/gameplay.png)
+![CheckTalk chess coach with Stockfish, position-specific guidance, and configurable controls](screenshots/gameplay.png)
 
 ## The data engineering story
 
@@ -18,7 +18,7 @@ The chess interface is the event producer and live demonstration. Underneath it 
 4. Handles consumer failures without replaying successful records.
 5. Stores immutable raw events in an encrypted Bronze layer.
 6. Exposes the history through a cataloged, guardrailed query layer.
-7. Uses the trusted operational context to support a low-latency AI commentary experience.
+7. Uses trusted operational context to support a low-latency chess coach, with live commentary as an alternate experience.
 
 I designed and built the complete lifecycle: event modeling, ingestion, stream partitioning, fault-tolerant persistence, storage layout, metadata catalog, query controls, observability, infrastructure, deployment, and the product that generates the data.
 
@@ -70,7 +70,7 @@ React + Stockfish → API Gateway → Lambda → Bedrock + Polly
 
 The synchronous path serves the live product, while the analytical path remains asynchronous. Both originate from the same game domain, but analytics backpressure cannot delay a move. Stockfish and deterministic classifiers establish the facts; AI is used only to turn trusted context into a concise spoken line.
 
-This is intentionally a data platform with an AI-powered serving use case—not an AI model presented as the system of record.
+This is intentionally a data platform with an AI-powered serving use case—not an AI model presented as the system of record. The coach teaches from verified board facts and shallow engine signals; it does not claim to know an unverified best move.
 
 ## Data reliability and operability
 
@@ -102,7 +102,8 @@ This is intentionally a data platform with an AI-powered serving use case—not 
 
 The platform supports a polished live product while demonstrating that infrastructure through an understandable domain:
 
-- Opening-aware commentary grounded in Stockfish and deterministic position context.
+- Coach-first play with concise move feedback, a next-decision question after Stockfish replies, and an on-demand hint.
+- An optional live commentary mode grounded in Stockfish and deterministic position context.
 - Three original commentary delivery profiles.
 - Multiple time controls and engine difficulty levels.
 - Session history and replay for the latest three games.
@@ -113,7 +114,7 @@ The platform supports a polished live product while demonstrating that infrastru
 
 ## Verification
 
-- **39 backend unit tests** across event ingestion, persistence, commentary classification, opening recognition, and position context.
+- **49 backend unit tests** across event ingestion, persistence, coaching and commentary behavior, opening recognition, and position context.
 - Stream-ingestion tests for validation, partition keys, and accepted-record responses.
 - Persistence tests for S3 object layout and partial batch failures.
 - Production smoke checks covering ingestion, S3 persistence, Athena visibility, and dead-letter queue health.
